@@ -6,7 +6,8 @@ export async function GET(request: NextRequest) {
     const userId = 'default-user'; // TODO: get from session
     const authUrl = getAuthUrl(userId);
     
-    return NextResponse.json({ authUrl });
+    // Redirect directly to Google OAuth instead of returning JSON
+    return NextResponse.redirect(authUrl);
   } catch (error) {
     console.error('Error generating Drive auth URL:', error);
     return NextResponse.json(
