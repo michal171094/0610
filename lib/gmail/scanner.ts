@@ -191,7 +191,10 @@ ${context.clients.map(c => `• ID: ${c.id} | ${c.name}${c.company ? ` (${c.comp
 
 **צעד 1: זהה התאמה** 
 - בדוק אם המייל קשור לחוב/משימה/ארגון **קיים** מהרשימה למעלה
-- השווה לפי: שם חברה, מספר תיק, מספר אסמכתא, נושא דומה
+- השווה לפי: שם חברה, מספר תיק, מספר אסמכתא, נושא דומה, סכומים, תאריכים
+- **חיפוש מקיף:** גם אם השם לא זהה בדיוק, חפש דמיון (לדוגמה: "PAIR" = "PAIR Finance")
+- **מספרי תיק:** אם יש מספר תיק במייל, חפש אותו ברשימה
+- **סכומים:** אם יש סכום דומה (±10%), זה יכול להיות אותו חוב
 - אם יש התאמה → החזר את ה-ID המדויק!
 
 **צעד 2: קבע סוג עדכון**
@@ -489,27 +492,30 @@ export async function scanAllAccounts(
         // 🚀 SMART CHECK: Skip emails already processed
         const { data: existingInsight } = await supabaseAdmin
           .from('email_insights')
-          .select('id, processed')
+          .select('id, processed, relevance')
           .eq('email_id', email.id)
           .eq('gmail_account_id', account.id)
           .single();
 
         if (existingInsight) {
-          console.log(`⏭️  Skipping duplicate email: ${email.subject}`);
+          console.log(`⏭️  Skipping duplicate email: ${email.subject} (${existingInsight.relevance})`);
           continue;
         }
 
+        console.log(`🔍 Analyzing new email: ${email.subject} from ${email.from}`);
+        
         const insight = await analyzeEmailWithContext(email, context);
         
-        // Skip spam and low relevance
+        console.log(`📊 Analysis result: relevance=${insight.relevance}, type=${insight.related_to?.type}, update_type=${insight.update_type}`);
+        
+        // Save ALL insights (including low relevance) to prevent reprocessing
+        await saveEmailInsight(account.id, email, insight);
+        
+        // Skip spam and low relevance for updates
         if (insight.relevance === 'spam' || insight.relevance === 'low') {
-          // Still save to prevent reprocessing
-          await saveEmailInsight(account.id, email, insight);
+          console.log(`⏭️  Skipping low relevance: ${email.subject}`);
           continue;
         }
-
-        // Save insight to database
-        await saveEmailInsight(account.id, email, insight);
 
         // Add to insights list
         insights.push({

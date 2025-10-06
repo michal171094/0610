@@ -13,6 +13,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { DB_SCHEMA } from '@/lib/config/schema';
 import { DriveScanner } from '@/lib/drive/scanner';
 import { SyncAgent } from '@/lib/agents/sync-agent';
+import { performReverseSearch, saveReverseSearchResults } from '@/lib/agents/reverse-search-agent';
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,6 +23,7 @@ export async function POST(request: NextRequest) {
       gmail: { scanned: 0, insights: 0 },
       drive: { scanned: 0, insights: 0 },
       chat: { analyzed: 0, insights: 0 },
+      reverseSearch: { targets: 0, newEmails: 0, updates: 0 },
       crossDomain: { connections: 0, suggestions: 0 },
       total: { suggestions: 0, errors: [] as string[] }
     };
@@ -147,7 +149,26 @@ export async function POST(request: NextRequest) {
       syncResults.total.errors.push(`Communications: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
-    // 4. Cross-Domain Analysis
+    // 4. Reverse Search - Find new emails for existing entities
+    try {
+      console.log('🔍 Starting reverse search...');
+      
+      const reverseResults = await performReverseSearch('michal', 50);
+      
+      syncResults.reverseSearch.targets = reverseResults.length;
+      syncResults.reverseSearch.newEmails = reverseResults.reduce((sum, r) => sum + r.found_emails, 0);
+      syncResults.reverseSearch.updates = reverseResults.reduce((sum, r) => sum + r.new_updates, 0);
+      
+      // Save results to memory
+      await saveReverseSearchResults(reverseResults);
+      
+      console.log(`✅ Reverse search completed: ${reverseResults.length} targets, ${syncResults.reverseSearch.newEmails} emails found, ${syncResults.reverseSearch.updates} updates`);
+    } catch (error) {
+      console.error('❌ Reverse search error:', error);
+      syncResults.total.errors.push(`Reverse search: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    // 5. Cross-Domain Analysis
     try {
       console.log('🔗 Starting cross-domain analysis...');
       
@@ -166,7 +187,7 @@ export async function POST(request: NextRequest) {
       syncResults.total.errors.push(`Cross-domain: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
-    // 5. Log sync results
+    // 6. Log sync results
     await supabaseAdmin
       .from(DB_SCHEMA.sync_logs.table)
       .insert({

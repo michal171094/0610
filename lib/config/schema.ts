@@ -86,16 +86,23 @@ export const DB_SCHEMA = {
       from_address: 'text',
       subject: 'text',
       body: 'text',
+      transcript: 'text', // 🚀 Full email transcript for indexing
       received_at: 'timestamp',
       relevance: 'text',
       related_type: 'text',
       related_id: 'text',
+      related_name: 'text',
       summary: 'text',
       should_create_task: 'boolean',
       processed: 'boolean',
       is_update: 'boolean',
       update_type: 'text',
+      extracted_entities: 'jsonb', // 🚀 Extracted case numbers, amounts, etc.
+      case_numbers: 'text[]', // 🚀 Case numbers found in email
+      amounts: 'numeric[]', // 🚀 Amounts found in email
+      dates: 'date[]', // 🚀 Important dates found
       created_at: 'timestamp',
+      indexed_at: 'timestamp', // 🚀 When transcript was indexed
     },
   },
 
@@ -262,9 +269,14 @@ export const DB_SCHEMA = {
       related_to: 'text[]',
       related_task: 'text',
       extracted_text: 'text',
+      transcript: 'text', // 🚀 Full document transcript for indexing
+      case_numbers: 'text[]', // 🚀 Case numbers found in document
+      amounts: 'numeric[]', // 🚀 Amounts found in document
+      dates: 'date[]', // 🚀 Important dates found
       analyzed_at: 'timestamp',
       processed: 'boolean',
       processed_at: 'timestamp',
+      indexed_at: 'timestamp', // 🚀 When transcript was indexed
       created_at: 'timestamp',
       drive_account_id: 'uuid',
     },
@@ -283,9 +295,14 @@ export const DB_SCHEMA = {
       contact_name: 'text',
       metadata: 'jsonb',
       embedding: 'vector',
+      transcript: 'text', // 🚀 Full message transcript for indexing
+      case_numbers: 'text[]', // 🚀 Case numbers found in message
+      amounts: 'numeric[]', // 🚀 Amounts found in message
+      dates: 'date[]', // 🚀 Important dates found
       processed: 'boolean',
       processed_at: 'timestamp',
       created_task_id: 'text',
+      indexed_at: 'timestamp', // 🚀 When transcript was indexed
       timestamp: 'timestamp',
     },
   },
