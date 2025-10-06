@@ -1,0 +1,16 @@
+> git add -A -- .
+warning: in the working copy of 'app/api/gmail/scan/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lib/ai-agent/tools.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package-lock.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'PROJECT-STATUS-REPORT.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/background/sync/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/monitor/check/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/sync/apply/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/sync/run/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/sync/status/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'db-scan.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lib/config/schema.ts', LF will be replaced by CRLF the next time Git touches it
+error: short read while indexing nul
+error: nul: failed to insert into database
+error: unable to index file 'nul'
+fatal: adding files failed

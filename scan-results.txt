@@ -1,0 +1,29 @@
+[1m[36m
+🚀 מתחיל ניתוח מצב הפרויקט...
+[0m
+[36m📊 שלב 0: תיקון Mismatches[0m
+[32m  ✅ lib/config/schema.ts: קובץ קיים[0m
+[32m  ✅ tools.ts (unified_dashboard → tasks): תוקן! משתמש ב-tasks[0m
+[36m
+📊 שלב 1: חיבור הזיכרון[0m
+[32m  ✅ lib/memory/manager.ts: קיים[0m
+[32m  ✅ langraph.ts - חיבור לזיכרון: מחובר[0m
+[36m
+📊 שלב 2: Sync Manager[0m
+[32m  ✅ route.ts: קיים[0m
+[32m  ✅ route.ts: קיים[0m
+[36m
+📊 שלב 3: Background Polling[0m
+[32m  ✅ app/api/background/sync/route.ts: קיים[0m
+[36m
+📝 יוצר דוח מלא...[0m
+[1m[32m
+✅ הדוח נוצר בהצלחה![0m
+[36m📄 נשמר ב: PROJECT-STATUS-REPORT.md[0m
+[33m
+💡 עכשיו תוכלי לפתוח את הקובץ ולשלוח לי אותו!
+[0m
+(node:11412) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/admin/Downloads/michalai-fullsystem.zip/scripts/analyze-current-state.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\admin\Downloads\michalai-fullsystem.zip\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
