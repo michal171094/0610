@@ -23,7 +23,8 @@ const colors = {
   cyan: '\x1b[36m',
   red: '\x1b[31m',
   magenta: '\x1b[35m',
-  blue: '\x1b[34m'
+  blue: '\x1b[34m',
+  white: '\x1b[37m'
 };
 
 function log(message: string, color = colors.reset) {

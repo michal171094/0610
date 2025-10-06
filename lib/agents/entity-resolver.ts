@@ -5,11 +5,18 @@
  * - By exact name match
  * - By fuzzy match (similar names)
  * - By context clues
+ * - By cross-domain analysis (e.g., Norway benefit → Kazakhstan insurance)
  * 
  * Used by Sync Agent to connect emails to existing records
  */
 
 import { supabase } from '@/lib/supabase'
+import { DB_SCHEMA } from '@/lib/config/schema'
+import OpenAI from 'openai'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
 export interface ResolvedEntity {
   id: string
@@ -31,7 +38,7 @@ export class EntityResolver {
   private supabase = supabase
 
   /**
-   * Main resolution function
+   * Main resolution function - enhanced with cross-domain analysis
    */
   async resolve(text: string): Promise<ResolutionResult> {
     const result: ResolutionResult = {
@@ -46,17 +53,73 @@ export class EntityResolver {
     const potentialNames = this.extractNames(text)
     const potentialEmails = this.extractEmails(text)
 
-    // 2. Resolve each name
-    for (const name of potentialNames) {
-      const resolved = await this.resolveEntityByName(name)
+    // 2. AI-powered entity resolution
+    try {
+      const aiAnalysis = await this.analyzeWithAI(text)
       
-      resolved.clients.forEach(c => result.clients.push(c))
-      resolved.debts.forEach(d => result.debts.push(d))
-      resolved.tasks.forEach(t => result.tasks.push(t))
-      resolved.bureaucracy.forEach(b => result.bureaucracy.push(b))
+      // Process AI suggestions
+      for (const suggestion of aiAnalysis.entitySuggestions) {
+        const resolved = await this.resolveEntityBySuggestion(suggestion)
+        if (resolved) {
+          switch (suggestion.type) {
+            case 'client':
+              result.clients.push(resolved)
+              break
+            case 'debt':
+              result.debts.push(resolved)
+              break
+            case 'task':
+              result.tasks.push(resolved)
+              break
+            case 'bureaucracy':
+              result.bureaucracy.push(resolved)
+              break
+          }
+        } else {
+          // New entity
+          result.new_entities.push({
+            name: suggestion.name,
+            email: suggestion.email,
+            type: suggestion.type,
+          })
+        }
+      }
+
+      // Cross-domain analysis
+      const crossDomainEntities = await this.findCrossDomainConnectionsWithAI(text, result)
+      result.clients.push(...crossDomainEntities.clients)
+      result.debts.push(...crossDomainEntities.debts)
+      result.tasks.push(...crossDomainEntities.tasks)
+      result.bureaucracy.push(...crossDomainEntities.bureaucracy)
+
+      // Semantic search
+      const semanticMatches = await this.findSemanticMatches(text)
+      result.clients.push(...semanticMatches.clients)
+      result.debts.push(...semanticMatches.debts)
+      result.tasks.push(...semanticMatches.tasks)
+      result.bureaucracy.push(...semanticMatches.bureaucracy)
+
+    } catch (error) {
+      console.error('AI resolution failed, falling back to basic:', error)
+      
+      // Fallback to basic resolution
+      for (const name of potentialNames) {
+        const resolved = await this.resolveEntityByName(name)
+        
+        resolved.clients.forEach(c => result.clients.push(c))
+        resolved.debts.forEach(d => result.debts.push(d))
+        resolved.tasks.forEach(t => result.tasks.push(t))
+        resolved.bureaucracy.forEach(b => result.bureaucracy.push(b))
+      }
     }
 
-    // 3. Check for new entities
+    // 3. Remove duplicates (AI already handled cross-domain analysis)
+    result.clients = this.removeDuplicates(result.clients)
+    result.debts = this.removeDuplicates(result.debts)
+    result.tasks = this.removeDuplicates(result.tasks)
+    result.bureaucracy = this.removeDuplicates(result.bureaucracy)
+
+    // 4. Check for new entities
     for (const name of potentialNames) {
       const isKnown = 
         result.clients.some(c => c.name.toLowerCase() === name.toLowerCase()) ||
@@ -378,7 +441,398 @@ export class EntityResolver {
 
     return matrix[str2.length][str1.length]
   }
+
+  /**
+   * Find cross-domain connections between entities
+   * Example: Norway benefit → Kazakhstan insurance
+   */
+  private async findCrossDomainConnections(
+    text: string, 
+    existingEntities: ResolutionResult
+  ): Promise<{
+    clients: ResolvedEntity[]
+    debts: ResolvedEntity[]
+    tasks: ResolvedEntity[]
+    bureaucracy: ResolvedEntity[]
+  }> {
+    const result = {
+      clients: [] as ResolvedEntity[],
+      debts: [] as ResolvedEntity[],
+      tasks: [] as ResolvedEntity[],
+      bureaucracy: [] as ResolvedEntity[],
+    }
+
+    // Cross-domain patterns
+    const patterns = [
+      {
+        keywords: ['נורבגיה', 'קצבה', 'הפסיקה'],
+        connectionType: 'bureaucracy',
+        searchTerms: ['ביטוח לאומי', 'קזחסטן', 'קצבה'],
+        description: 'קצבה בנורבגיה הפסיקה - בדוק השפעה על ביטוח לאומי בקזחסטן'
+      },
+      {
+        keywords: ['חוב', 'הסדר', 'תשלום'],
+        connectionType: 'debt',
+        searchTerms: ['ביטוח לאומי', 'זכאות', 'קצבה'],
+        description: 'הסדר חוב - בדוק השפעה על זכאות לקצבאות'
+      },
+      {
+        keywords: ['לקוח', 'פרויקט', 'השלמה'],
+        connectionType: 'client',
+        searchTerms: ['תשלום', 'חוב', 'חיוב'],
+        description: 'השלמת פרויקט - בדוק השפעה על תשלומים וחובות'
+      }
+    ]
+
+    // Check for cross-domain patterns
+    for (const pattern of patterns) {
+      const hasKeywords = pattern.keywords.some(keyword => text.includes(keyword))
+      
+      if (hasKeywords) {
+        // Search for related entities using the pattern's search terms
+        for (const searchTerm of pattern.searchTerms) {
+          const relatedEntities = await this.searchEntitiesByKeyword(searchTerm, pattern.connectionType)
+          
+          relatedEntities.forEach(entity => {
+            // Add cross-domain connection
+            const crossDomainEntity: ResolvedEntity = {
+              id: entity.id,
+              type: entity.type as any,
+              name: `${entity.name} (קשר: ${pattern.description})`,
+              confidence: 0.7, // High confidence for cross-domain connections
+              match_type: 'context'
+            }
+
+            switch (pattern.connectionType) {
+              case 'bureaucracy':
+                result.bureaucracy.push(crossDomainEntity)
+                break
+              case 'debt':
+                result.debts.push(crossDomainEntity)
+                break
+              case 'client':
+                result.clients.push(crossDomainEntity)
+                break
+            }
+          })
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Search entities by keyword across all tables
+   */
+  private async searchEntitiesByKeyword(keyword: string, type: string): Promise<any[]> {
+    const results: any[] = []
+
+    try {
+      // Search in relevant tables based on type
+      if (type === 'bureaucracy' || type === 'all') {
+        const { data: bureaucracy } = await supabase
+          .from(DB_SCHEMA.bureaucracy.table)
+          .select('*')
+          .or(`title.ilike.%${keyword}%,agency.ilike.%${keyword}%`)
+          .limit(5)
+
+        if (bureaucracy) {
+          results.push(...bureaucracy.map(b => ({
+            id: b.id,
+            name: b.title,
+            type: 'bureaucracy'
+          })))
+        }
+      }
+
+      if (type === 'debt' || type === 'all') {
+        const { data: debts } = await supabase
+          .from(DB_SCHEMA.debts.table)
+          .select('*')
+          .or(`original_company.ilike.%${keyword}%,collection_company.ilike.%${keyword}%`)
+          .limit(5)
+
+        if (debts) {
+          results.push(...debts.map(d => ({
+            id: d.id,
+            name: d.original_company,
+            type: 'debt'
+          })))
+        }
+      }
+
+      if (type === 'client' || type === 'all') {
+        const { data: clients } = await supabase
+          .from(DB_SCHEMA.clients.table)
+          .select('*')
+          .or(`name.ilike.%${keyword}%,project_type.ilike.%${keyword}%`)
+          .limit(5)
+
+        if (clients) {
+          results.push(...clients.map(c => ({
+            id: c.id,
+            name: c.name,
+            type: 'client'
+          })))
+        }
+      }
+
+    } catch (error) {
+      console.error('Error searching entities by keyword:', error)
+    }
+
+    return results
+  }
+
+  /**
+   * 🧠 AI-powered entity analysis
+   */
+  private async analyzeWithAI(text: string): Promise<{
+    entitySuggestions: Array<{
+      name: string;
+      type: 'client' | 'debt' | 'task' | 'bureaucracy';
+      confidence: number;
+      email?: string;
+      context?: string;
+    }>;
+    crossDomainConnections: Array<{
+      source: string;
+      target: string;
+      relationship: string;
+      confidence: number;
+    }>;
+  }> {
+    try {
+      const prompt = `Analyze this text and identify entities (clients, debts, tasks, bureaucracy) and their relationships:
+
+Text: "${text}"
+
+Return JSON with:
+{
+  "entitySuggestions": [
+    {
+      "name": "entity name",
+      "type": "client|debt|task|bureaucracy",
+      "confidence": 0.0-1.0,
+      "email": "email if found",
+      "context": "relevant context"
+    }
+  ],
+  "crossDomainConnections": [
+    {
+      "source": "source entity",
+      "target": "target entity", 
+      "relationship": "how they're connected",
+      "confidence": 0.0-1.0
+    }
+  ]
 }
+
+Look for:
+- Company names, people names
+- Debt amounts, case numbers, account numbers
+- Task descriptions, deadlines, priorities
+- Government agencies, forms, procedures
+- Cross-domain connections (e.g., Norway benefit → Kazakhstan insurance)`;
+
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0.3,
+      });
+
+      return JSON.parse(response.choices[0].message.content || '{"entitySuggestions":[],"crossDomainConnections":[]}');
+    } catch (error) {
+      console.error('AI analysis error:', error);
+      return { entitySuggestions: [], crossDomainConnections: [] };
+    }
+  }
+
+  /**
+   * 🔍 Resolve entity by AI suggestion
+   */
+  private async resolveEntityBySuggestion(suggestion: any): Promise<ResolvedEntity | null> {
+    try {
+      // Try exact match first
+      const exactMatches = await this.resolveByName(suggestion.name, 'exact');
+      
+      // Check all entity types
+      const allMatches = [
+        ...exactMatches.clients,
+        ...exactMatches.debts,
+        ...exactMatches.tasks,
+        ...exactMatches.bureaucracy
+      ];
+
+      if (allMatches.length > 0) {
+        // Return the best match
+        return allMatches.sort((a, b) => b.confidence - a.confidence)[0];
+      }
+
+      // Try fuzzy match
+      const fuzzyMatches = await this.resolveByName(suggestion.name, 'fuzzy');
+      const allFuzzyMatches = [
+        ...fuzzyMatches.clients,
+        ...fuzzyMatches.debts,
+        ...fuzzyMatches.tasks,
+        ...fuzzyMatches.bureaucracy
+      ];
+
+      if (allFuzzyMatches.length > 0) {
+        return allFuzzyMatches.sort((a, b) => b.confidence - a.confidence)[0];
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error resolving entity by suggestion:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 🌐 Cross-domain analysis with AI
+   */
+  private async findCrossDomainConnectionsWithAI(
+    text: string,
+    existingEntities: ResolutionResult
+  ): Promise<{
+    clients: ResolvedEntity[];
+    debts: ResolvedEntity[];
+    tasks: ResolvedEntity[];
+    bureaucracy: ResolvedEntity[];
+  }> {
+    const result = {
+      clients: [] as ResolvedEntity[],
+      debts: [] as ResolvedEntity[],
+      tasks: [] as ResolvedEntity[],
+      bureaucracy: [] as ResolvedEntity[]
+    };
+
+    try {
+      // Look for cross-domain patterns
+      const patterns = [
+        {
+          keywords: ['נורבגיה', 'קצבה', 'הפסיקה'],
+          action: 'בדוק ביטוח לאומי קזחסטן',
+          reason: 'קצבה בנורבגיה הפסיקה - ייתכן שצריך לעדכן ביטוח לאומי בקזחסטן',
+          searchQuery: 'Norway social security benefits Kazakhstan national insurance impact'
+        },
+        {
+          keywords: ['גרמניה', 'חוב', 'חיוב'],
+          action: 'בדוק השפעה על ביטוח לאומי ישראל',
+          reason: 'חוב בגרמניה יכול להשפיע על זכויות ביטוח לאומי',
+          searchQuery: 'Germany debt impact Israel national insurance'
+        }
+      ];
+
+      const allText = `${text} ${existingEntities.clients.map(e => e.name).join(' ')} ${existingEntities.debts.map(e => e.name).join(' ')}`;
+
+      for (const pattern of patterns) {
+        const hasKeywords = pattern.keywords.some(keyword => allText.includes(keyword));
+
+        if (hasKeywords) {
+          // Create a cross-domain task
+          result.tasks.push({
+            id: crypto.randomUUID(),
+            type: 'task',
+            name: pattern.action,
+            confidence: 0.8,
+            match_type: 'context'
+          });
+
+          // Save pattern to memory
+          await this.supabase
+            .from('agent_memories')
+            .insert({
+              content: `Cross-domain pattern detected: ${pattern.reason}`,
+              memory_type: 'pattern',
+              importance: 0.8,
+              tags: ['cross-domain', pattern.keywords.join(',')]
+            });
+        }
+      }
+    } catch (error) {
+      console.error('Error in cross-domain analysis:', error);
+    }
+
+    return result;
+  }
+
+  /**
+   * 🔍 Semantic search for related entities
+   */
+  private async findSemanticMatches(text: string): Promise<{
+    clients: ResolvedEntity[];
+    debts: ResolvedEntity[];
+    tasks: ResolvedEntity[];
+    bureaucracy: ResolvedEntity[];
+  }> {
+    const result = {
+      clients: [] as ResolvedEntity[],
+      debts: [] as ResolvedEntity[],
+      tasks: [] as ResolvedEntity[],
+      bureaucracy: [] as ResolvedEntity[]
+    };
+
+    try {
+      // Use semantic search to find similar entities
+      const { data: semanticMatches } = await this.supabase.rpc('search_semantic_memories', {
+        query_embedding: await this.getTextEmbedding(text),
+        match_threshold: 0.7,
+        match_count: 10,
+        p_user_id: 'michal'
+      });
+
+      if (semanticMatches) {
+        for (const match of semanticMatches) {
+          // Try to resolve the matched content
+          const resolved = await this.resolveByName(match.content, 'context');
+          
+          result.clients.push(...resolved.clients);
+          result.debts.push(...resolved.debts);
+          result.tasks.push(...resolved.tasks);
+          result.bureaucracy.push(...resolved.bureaucracy);
+        }
+      }
+    } catch (error) {
+      console.error('Error in semantic search:', error);
+    }
+
+    return result;
+  }
+
+  /**
+   * 📝 Get text embedding for semantic search
+   */
+  private async getTextEmbedding(text: string): Promise<number[]> {
+    try {
+      const response = await openai.embeddings.create({
+        model: 'text-embedding-ada-002',
+        input: text
+      });
+      return response.data[0].embedding;
+    } catch (error) {
+      console.error('Error getting embedding:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 🔄 Remove duplicate entities
+   */
+  private removeDuplicates(entities: ResolvedEntity[]): ResolvedEntity[] {
+    const seen = new Set<string>();
+    return entities.filter(entity => {
+      const key = `${entity.type}-${entity.name.toLowerCase()}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
 
 // Singleton
 let entityResolver: EntityResolver | null = null

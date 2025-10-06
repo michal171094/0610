@@ -68,7 +68,7 @@ export class SyncAgent {
         .eq('processed', false)
       
       // טעינת נתוני DB קיימים
-      const { data: tasks } = await supabaseAdmin.from('tasks').select('*')
+      const { data: tasks } = await supabaseAdmin.from('unified_dashboard').select('*')
       const { data: debts } = await supabaseAdmin.from('debts').select('*')
       const { data: clients } = await supabaseAdmin.from('clients').select('*')
       
@@ -379,7 +379,7 @@ export class MonitorAgent {
     console.log('🔔 מנתח מצב ויוצר alerts...')
     
     // טעינת נתונים
-    const { data: tasks } = await supabaseAdmin.from('tasks').select('*')
+    const { data: tasks } = await supabaseAdmin.from('unified_dashboard').select('*')
     const { data: debts } = await supabaseAdmin.from('debts').select('*')
     
     const systemPrompt = \`אתה סוכן AI שמנתח משימות וחובות ומזהה בעיות.
@@ -435,7 +435,7 @@ export async function POST(request: NextRequest) {
   try {
     // ✅ תוקן: tasks במקום unified_dashboard
     const { data: tasks, error } = await supabaseAdmin
-      .from('tasks')  // ✅ הוחלף!
+      .from('unified_dashboard')  // ✅ הוחלף!
       .select('*')
       .order('ai_score', { ascending: false })  // ✅ תוקן: ai_score במקום priority_score
     
@@ -457,7 +457,7 @@ export async function GET(request: NextRequest) {
   try {
     // ✅ תוקן: tasks במקום unified_dashboard
     const { data, error } = await supabaseAdmin
-      .from('tasks')  // ✅ הוחלף!
+      .from('unified_dashboard')  // ✅ הוחלף!
       .select('*')
     
     if (error) throw error
@@ -474,7 +474,7 @@ export async function POST(request: NextRequest) {
     
     // ✅ תוקן: tasks במקום unified_dashboard
     const { data, error } = await supabaseAdmin
-      .from('tasks')  // ✅ הוחלף!
+      .from('unified_dashboard')  // ✅ הוחלף!
       .insert(body)
       .select()
     
@@ -493,7 +493,7 @@ export async function PATCH(request: NextRequest) {
     
     // ✅ תוקן: tasks במקום unified_dashboard
     const { data, error } = await supabaseAdmin
-      .from('tasks')  // ✅ הוחלף!
+      .from('unified_dashboard')  // ✅ הוחלף!
       .update(updates)
       .eq('id', id)
       .select()

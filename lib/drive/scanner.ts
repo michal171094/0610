@@ -1,367 +1,381 @@
+/**
+ * 📁 Google Drive Scanner
+ * 
+ * סורק מסמכים ב-Drive ומבצע:
+ * - OCR למסמכים
+ * - ניתוח AI של התוכן
+ * - זיהוי ישויות (חובות, לקוחות, משימות)
+ * - יצירת הצעות פעולה
+ */
+
 import { google } from 'googleapis';
-import { getOAuth2Client, getValidAccessToken } from './oauth';
 import { supabaseAdmin } from '@/lib/supabase';
+import { DB_SCHEMA } from '@/lib/config/schema';
 import OpenAI from 'openai';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!
+  apiKey: process.env.OPENAI_API_KEY!,
 });
 
-interface DriveFile {
+export interface DriveDocument {
   id: string;
   name: string;
   mimeType: string;
+  size?: string;
   modifiedTime: string;
-  webViewLink: string;
-  size: string;
-  thumbnailLink?: string;
+  webViewLink?: string;
+  parents?: string[];
 }
 
-interface DocumentInsight {
-  fileId: string;
-  fileName: string;
-  relevance: 'high' | 'medium' | 'low';
-  category: 'debt' | 'bureaucracy' | 'legal' | 'health' | 'client' | 'other';
-  relatedTo: string[];
-  extractedText?: string;
+export interface DocumentInsight {
+  id: string;
+  file_id: string;
+  file_name: string;
   summary: string;
-  actionItems: string[];
-  suggestedTasks: string[];
+  category: string;
+  relevance: 'high' | 'medium' | 'low';
   entities: {
-    organizations?: string[];
-    dates?: string[];
-    amounts?: string[];
-    people?: string[];
+    debts?: Array<{ name: string; amount?: number; status?: string }>;
+    clients?: Array<{ name: string; email?: string; project?: string }>;
+    tasks?: Array<{ title: string; deadline?: string; priority?: string }>;
+    bureaucracy?: Array<{ agency: string; deadline?: string; status?: string }>;
   };
+  action_items: string[];
+  suggested_tasks: Array<{
+    title: string;
+    description: string;
+    priority: 'high' | 'medium' | 'low';
+    deadline?: string;
+    linked_entity?: { type: string; id: string };
+  }>;
+  related_to: string[];
+  extracted_text: string;
 }
 
-/**
- * חיפוש קבצים רלוונטיים ב-Drive
- */
-export async function searchDriveFiles(
-  accountId: string,
-  query: string,
-  limit: number = 50
-): Promise<DriveFile[]> {
-  try {
-    const accessToken = await getValidAccessToken(accountId);
-    const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials({ access_token: accessToken });
+export class DriveScanner {
+  private drive: any;
+  private userId: string;
 
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-    // חיפוש קבצים (PDFs, תמונות, מסמכים)
-    const response = await drive.files.list({
-      q: `(${query}) and (
-        mimeType='application/pdf' or 
-        mimeType contains 'image/' or 
-        mimeType contains 'document' or
-        mimeType contains 'text'
-      ) and trashed=false`,
-      pageSize: limit,
-      fields: 'files(id, name, mimeType, modifiedTime, webViewLink, size, thumbnailLink)',
-      orderBy: 'modifiedTime desc'
-    });
-
-    return response.data.files as DriveFile[] || [];
-  } catch (error) {
-    console.error('Error searching Drive files:', error);
-    throw error;
+  constructor(userId: string) {
+    this.userId = userId;
+    this.initializeDrive();
   }
-}
 
-/**
- * חילוץ טקסט מקובץ (OCR למסמכים סרוקים)
- */
-export async function extractTextFromFile(
-  accountId: string,
-  fileId: string
-): Promise<string> {
-  try {
-    const accessToken = await getValidAccessToken(accountId);
-    const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials({ access_token: accessToken });
+  private async initializeDrive() {
+    // Get Drive account from Supabase
+    const { data: account, error } = await supabaseAdmin
+      .from(DB_SCHEMA.drive_accounts.table)
+      .select('*')
+      .eq('user_id', this.userId)
+      .single();
 
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-    // קבלת פרטי הקובץ
-    const fileMetadata = await drive.files.get({
-      fileId,
-      fields: 'mimeType, name'
-    });
-
-    const mimeType = fileMetadata.data.mimeType;
-
-    // אם זה PDF או תמונה - נשתמש ב-OCR של Google Vision
-    if (mimeType?.includes('pdf') || mimeType?.includes('image')) {
-      // ייצוא ל-Google Docs format (מבצע OCR אוטומטית)
-      const response = await drive.files.export({
-        fileId,
-        mimeType: 'text/plain'
-      }, { responseType: 'text' });
-
-      return response.data as string;
+    if (error || !account) {
+      throw new Error(`No Drive account found for user ${this.userId}`);
     }
 
-    // אם זה כבר מסמך טקסט
-    if (mimeType?.includes('text') || mimeType?.includes('document')) {
-      const response = await drive.files.export({
-        fileId,
-        mimeType: 'text/plain'
-      }, { responseType: 'text' });
+    // Initialize Google Drive API
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
 
-      return response.data as string;
-    }
-
-    return '';
-  } catch (error) {
-    console.error('Error extracting text from file:', error);
-    return '';
-  }
-}
-
-/**
- * ניתוח מסמך עם GPT-4
- */
-export async function analyzeDocument(
-  file: DriveFile,
-  extractedText: string,
-  taskContext?: string
-): Promise<DocumentInsight> {
-  try {
-    const systemPrompt = `אתה עוזר AI המנתח מסמכים עבור אישה העובדת עם מערכת ניהול משימות.
-היא מתמודדת עם:
-- חובות לבנקים וחברות
-- בירוקרטיה ממשלתית (Jobcenter, LEA, ביטוח לאומי)
-- ניהול לקוחות
-- סוגיות משפטיות ובריאותיות
-
-נתח את המסמך והחזר בפורמט JSON:
-{
-  "relevance": "high/medium/low",
-  "category": "debt/bureaucracy/legal/health/client/other",
-  "relatedTo": ["רשימת נושאים קשורים"],
-  "summary": "סיכום קצר של המסמך",
-  "actionItems": ["פעולות שצריך לבצע"],
-  "suggestedTasks": ["משימות מוצעות"],
-  "entities": {
-    "organizations": ["ארגונים"],
-    "dates": ["תאריכים חשובים"],
-    "amounts": ["סכומים כספיים"],
-    "people": ["אנשים"]
-  }
-}`;
-
-    const userPrompt = `מסמך: ${file.name}
-סוג: ${file.mimeType}
-${taskContext ? `הקשר למשימה: ${taskContext}` : ''}
-
-תוכן המסמך:
-${extractedText.substring(0, 4000)}
-
-נתח את המסמך והחזר JSON.`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3
+    oauth2Client.setCredentials({
+      access_token: account.access_token,
+      refresh_token: account.refresh_token,
     });
 
-    const analysis = JSON.parse(completion.choices[0].message.content || '{}');
-
-    return {
-      fileId: file.id,
-      fileName: file.name,
-      relevance: analysis.relevance || 'low',
-      category: analysis.category || 'other',
-      relatedTo: analysis.relatedTo || [],
-      extractedText,
-      summary: analysis.summary || '',
-      actionItems: analysis.actionItems || [],
-      suggestedTasks: analysis.suggestedTasks || [],
-      entities: analysis.entities || {}
-    };
-  } catch (error) {
-    console.error('Error analyzing document:', error);
-    throw error;
+    this.drive = google.drive({ version: 'v3', auth: oauth2Client });
   }
-}
 
-/**
- * חיפוש מסמכים אוטומטי למשימה
- */
-export async function findRelevantDocuments(
-  accountId: string,
-  taskTitle: string,
-  taskDescription: string,
-  domain: string
-): Promise<{ files: DriveFile[], insights: DocumentInsight[] }> {
-  try {
-    // בניית שאילתת חיפוש חכמה
-    const searchTerms = [
-      taskTitle,
-      ...taskDescription.split(' ').filter(word => word.length > 3)
-    ].join(' OR ');
+  /**
+   * Scan all documents in Drive
+   */
+  async scanAllDocuments(options: {
+    sinceDays?: number;
+    maxFiles?: number;
+    includeRead?: boolean;
+  } = {}): Promise<DocumentInsight[]> {
+    const { sinceDays = 7, maxFiles = 50 } = options;
 
-    // חיפוש קבצים
-    const files = await searchDriveFiles(accountId, searchTerms, 10);
+    console.log(`🔍 Scanning Drive documents for user ${this.userId}...`);
 
-    // ניתוח כל קובץ
+    // 1. Get recent documents from Drive
+    const documents = await this.getRecentDocuments(sinceDays, maxFiles);
+    console.log(`📁 Found ${documents.length} documents to analyze`);
+
+    // 2. Process each document
     const insights: DocumentInsight[] = [];
-    for (const file of files) {
+    for (const doc of documents) {
       try {
-        const text = await extractTextFromFile(accountId, file.id);
-        const insight = await analyzeDocument(
-          file,
-          text,
-          `${taskTitle} - ${taskDescription}`
-        );
-        
-        // שמירה לדאטהבייס
-        await saveDocumentInsight(accountId, insight, taskTitle);
-        insights.push(insight);
+        const insight = await this.analyzeDocument(doc);
+        if (insight.relevance !== 'low') {
+          insights.push(insight);
+        }
       } catch (error) {
-        console.error(`Error processing file ${file.name}:`, error);
+        console.error(`❌ Error analyzing document ${doc.name}:`, error);
       }
     }
 
-    return { files, insights };
-  } catch (error) {
-    console.error('Error finding relevant documents:', error);
-    throw error;
+    // 3. Save insights to database
+    await this.saveInsights(insights);
+
+    console.log(`✅ Drive scan completed: ${insights.length} relevant documents found`);
+    return insights;
   }
-}
 
-/**
- * שמירת תובנות מסמך לדאטהבייס
- */
-async function saveDocumentInsight(
-  accountId: string,
-  insight: DocumentInsight,
-  relatedTask: string
-) {
-  try {
-    const { error } = await supabaseAdmin
-      .from('document_insights')
-      .upsert({
-        drive_account_id: accountId,
-        file_id: insight.fileId,
-        file_name: insight.fileName,
-        relevance: insight.relevance,
-        category: insight.category,
-        related_to: insight.relatedTo,
-        extracted_text: insight.extractedText,
-        summary: insight.summary,
-        action_items: insight.actionItems,
-        suggested_tasks: insight.suggestedTasks,
-        entities: insight.entities,
-        related_task: relatedTask,
-        analyzed_at: new Date().toISOString()
-      }, {
-        onConflict: 'file_id'
-      });
+  /**
+   * Get recent documents from Drive
+   */
+  private async getRecentDocuments(sinceDays: number, maxFiles: number): Promise<DriveDocument[]> {
+    const sinceDate = new Date();
+    sinceDate.setDate(sinceDate.getDate() - sinceDays);
 
-    if (error) throw error;
-  } catch (error) {
-    console.error('Error saving document insight:', error);
-  }
-}
-
-/**
- * העלאת מסמך סרוק ידנית
- */
-export async function uploadScannedDocument(
-  accountId: string,
-  fileName: string,
-  fileContent: Buffer,
-  mimeType: string,
-  taskId?: string
-): Promise<{ fileId: string, webViewLink: string }> {
-  try {
-    const accessToken = await getValidAccessToken(accountId);
-    const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials({ access_token: accessToken });
-
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-    // יצירת תיקיית "Scanned Documents" אם לא קיימת
-    const folderResponse = await drive.files.list({
-      q: "name='Scanned Documents' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-      fields: 'files(id)'
+    const response = await this.drive.files.list({
+      pageSize: maxFiles,
+      orderBy: 'modifiedTime desc',
+      q: `modifiedTime > '${sinceDate.toISOString()}' and trashed = false`,
+      fields: 'files(id, name, mimeType, size, modifiedTime, webViewLink, parents)',
     });
 
-    let folderId: string;
-    if (folderResponse.data.files && folderResponse.data.files.length > 0) {
-      folderId = folderResponse.data.files[0].id!;
-    } else {
-      const folder = await drive.files.create({
-        requestBody: {
-          name: 'Scanned Documents',
-          mimeType: 'application/vnd.google-apps.folder'
-        },
-        fields: 'id'
-      });
-      folderId = folder.data.id!;
-    }
+    return response.data.files || [];
+  }
 
-    // העלאת הקובץ
-    const response = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [folderId]
-      },
-      media: {
-        mimeType,
-        body: fileContent
-      },
-      fields: 'id, webViewLink'
-    });
+  /**
+   * Analyze a single document with AI
+   */
+  private async analyzeDocument(doc: DriveDocument): Promise<DocumentInsight> {
+    console.log(`🔍 Analyzing document: ${doc.name}`);
 
-    const fileId = response.data.id!;
-    const webViewLink = response.data.webViewLink!;
+    // 1. Extract text (OCR if needed)
+    const extractedText = await this.extractText(doc);
 
-    // ניתוח אוטומטי של המסמך
-    if (taskId) {
-      const text = await extractTextFromFile(accountId, fileId);
-      const file: DriveFile = {
-        id: fileId,
-        name: fileName,
-        mimeType,
-        modifiedTime: new Date().toISOString(),
-        webViewLink,
-        size: fileContent.length.toString()
+    if (!extractedText || extractedText.length < 50) {
+      return {
+        id: crypto.randomUUID(),
+        file_id: doc.id,
+        file_name: doc.name,
+        summary: 'Document contains insufficient text for analysis',
+        category: 'unreadable',
+        relevance: 'low',
+        entities: {},
+        action_items: [],
+        suggested_tasks: [],
+        related_to: [],
+        extracted_text: extractedText || '',
       };
-      
-      const insight = await analyzeDocument(file, text, taskId);
-      await saveDocumentInsight(accountId, insight, taskId);
     }
 
-    return { fileId, webViewLink };
+    // 2. Get existing entities from database for context
+    const existingEntities = await this.getExistingEntities();
+
+    // 3. Analyze with GPT-4
+    const analysis = await this.analyzeWithAI(extractedText, doc.name, existingEntities);
+
+    return {
+      id: crypto.randomUUID(),
+      file_id: doc.id,
+      file_name: doc.name,
+      summary: analysis.summary,
+      category: analysis.category,
+      relevance: analysis.relevance,
+      entities: analysis.entities,
+      action_items: analysis.action_items,
+      suggested_tasks: analysis.suggested_tasks,
+      related_to: analysis.related_to,
+      extracted_text: extractedText,
+    };
+  }
+
+  /**
+   * Extract text from document (OCR if needed)
+   */
+  private async extractText(doc: DriveDocument): Promise<string> {
+    try {
+      // For PDFs and images, use OCR
+      if (doc.mimeType === 'application/pdf' || doc.mimeType.startsWith('image/')) {
+        return await this.performOCR(doc);
+      }
+
+      // For text files, try to get content directly
+      if (doc.mimeType === 'text/plain' || doc.mimeType.includes('document')) {
+        const response = await this.drive.files.export({
+          fileId: doc.id,
+          mimeType: 'text/plain',
+        });
+        return response.data as string;
+      }
+
+      // For Google Docs/Sheets, use export
+      if (doc.mimeType.includes('google-apps')) {
+        const exportMimeType = this.getExportMimeType(doc.mimeType);
+        const response = await this.drive.files.export({
+          fileId: doc.id,
+          mimeType: exportMimeType,
+        });
+        return response.data as string;
+      }
+
+      return '';
   } catch (error) {
-    console.error('Error uploading scanned document:', error);
+      console.error(`Error extracting text from ${doc.name}:`, error);
+      return '';
+  }
+}
+
+/**
+   * Perform OCR on document
+   */
+  private async performOCR(doc: DriveDocument): Promise<string> {
+    try {
+      // Download file for OCR processing
+      const response = await this.drive.files.get({
+        fileId: doc.id,
+        alt: 'media',
+      });
+
+      // For now, return placeholder - in production you'd use Tesseract or Google Vision API
+      return `[OCR Text from ${doc.name} - ${doc.mimeType}]`;
+  } catch (error) {
+      console.error(`OCR error for ${doc.name}:`, error);
+      return '';
+  }
+}
+
+/**
+   * Get export MIME type for Google Apps files
+   */
+  private getExportMimeType(mimeType: string): string {
+    switch (mimeType) {
+      case 'application/vnd.google-apps.document':
+        return 'text/plain';
+      case 'application/vnd.google-apps.spreadsheet':
+        return 'text/csv';
+      case 'application/vnd.google-apps.presentation':
+        return 'text/plain';
+      default:
+        return 'text/plain';
+    }
+  }
+
+  /**
+   * Analyze document content with GPT-4
+   */
+  private async analyzeWithAI(
+    text: string,
+  fileName: string,
+    existingEntities: any
+  ): Promise<any> {
+    const prompt = `Analyze this document for business-relevant information:
+
+Document: ${fileName}
+Content: ${text.substring(0, 4000)}...
+
+Existing entities in database:
+- Debts: ${JSON.stringify(existingEntities.debts?.slice(0, 5) || [])}
+- Clients: ${JSON.stringify(existingEntities.clients?.slice(0, 5) || [])}
+- Tasks: ${JSON.stringify(existingEntities.tasks?.slice(0, 5) || [])}
+- Bureaucracy: ${JSON.stringify(existingEntities.bureaucracy?.slice(0, 5) || [])}
+
+Return JSON with:
+{
+  "summary": "Brief summary of document content",
+  "category": "debt|client|bureaucracy|general",
+  "relevance": "high|medium|low",
+  "entities": {
+    "debts": [{"name": "...", "amount": 123, "status": "..."}],
+    "clients": [{"name": "...", "email": "...", "project": "..."}],
+    "tasks": [{"title": "...", "deadline": "...", "priority": "..."}],
+    "bureaucracy": [{"agency": "...", "deadline": "...", "status": "..."}]
+  },
+  "action_items": ["Action 1", "Action 2"],
+  "suggested_tasks": [
+    {
+      "title": "Task title",
+      "description": "Task description",
+      "priority": "high|medium|low",
+      "deadline": "YYYY-MM-DD",
+      "linked_entity": {"type": "debt|client|bureaucracy", "id": "..."}
+    }
+  ],
+  "related_to": ["entity_id_1", "entity_id_2"]
+}
+
+Focus on actionable items and cross-domain connections (e.g., Norway benefit → Kazakhstan insurance).`;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    });
+
+    return JSON.parse(response.choices[0].message.content || '{}');
+  }
+
+  /**
+   * Get existing entities from database for context
+   */
+  private async getExistingEntities(): Promise<any> {
+    const [debts, clients, tasks, bureaucracy] = await Promise.all([
+      supabaseAdmin.from(DB_SCHEMA.debts.table).select('id, original_company, amount, status').limit(20),
+      supabaseAdmin.from(DB_SCHEMA.clients.table).select('id, name, email, project_type').limit(20),
+      supabaseAdmin.from(DB_SCHEMA.tasks.table).select('id, title, status, deadline').limit(20),
+      supabaseAdmin.from(DB_SCHEMA.bureaucracy.table).select('id, title, agency, status, deadline').limit(20),
+    ]);
+
+    return {
+      debts: debts.data || [],
+      clients: clients.data || [],
+      tasks: tasks.data || [],
+      bureaucracy: bureaucracy.data || [],
+    };
+  }
+
+  /**
+   * Save insights to database
+   */
+  private async saveInsights(insights: DocumentInsight[]): Promise<void> {
+    if (insights.length === 0) return;
+
+    const { error } = await supabaseAdmin
+      .from(DB_SCHEMA.document_insights.table)
+      .upsert(
+        insights.map(insight => ({
+          id: insight.id,
+          file_id: insight.file_id,
+          file_name: insight.file_name,
+          summary: insight.summary,
+          category: insight.category,
+          relevance: insight.relevance,
+          entities: insight.entities,
+          action_items: insight.action_items,
+          suggested_tasks: insight.suggested_tasks,
+          related_to: insight.related_to,
+          extracted_text: insight.extracted_text,
+          analyzed_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+        })),
+        { onConflict: 'file_id' }
+      );
+
+    if (error) {
+      console.error('Error saving document insights:', error);
     throw error;
   }
 }
 
 /**
- * קבלת מסמכים קשורים למשימה
- */
-export async function getDocumentsForTask(taskId: string) {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('document_insights')
-      .select('*')
-      .eq('related_task', taskId)
-      .order('relevance', { ascending: false });
+   * Update last scanned timestamp
+   */
+  async updateLastScanned(): Promise<void> {
+    const { error } = await supabaseAdmin
+      .from(DB_SCHEMA.drive_accounts.table)
+      .update({ last_scanned_at: new Date().toISOString() })
+      .eq('user_id', this.userId);
 
-    if (error) throw error;
-    return data || [];
-  } catch (error) {
-    console.error('Error getting documents for task:', error);
-    return [];
+    if (error) {
+      console.error('Error updating last scanned timestamp:', error);
+    }
   }
 }

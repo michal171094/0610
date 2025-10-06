@@ -6,7 +6,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { QdrantMemory, MemoryMetadata, MemoryPoint } from './qdrant-memory'
+import { QdrantMemory, MemoryMetadata, MemoryPoint } from '@/lib/memory/qdrant-memory'
 import OpenAI from 'openai'
 
 export interface HybridMemoryOptions {

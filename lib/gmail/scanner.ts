@@ -46,13 +46,15 @@ export async function fetchRecentEmails(
     timeRange?: 'day' | 'week' | 'month';
     includeRead?: boolean;
     query?: string;
+    forceFullScan?: boolean; // 🚀 Force full scan regardless of last scan
   }
 ): Promise<EmailMessage[]> {
   const {
     maxResults = 100,
     timeRange = 'week',
     includeRead = false,
-    query
+    query,
+    forceFullScan = false
   } = options || {};
 
   const oauth2Client = getOAuth2Client();
@@ -68,7 +70,7 @@ export async function fetchRecentEmails(
     month: '30d'
   };
 
-  // Build comprehensive search query
+  // 🚀 SMART QUERY: Build intelligent search based on last scan
   let searchQuery = query || '';
   
   if (!searchQuery) {
@@ -76,11 +78,27 @@ export async function fetchRecentEmails(
       includeRead ? '' : 'is:unread',
       '-category:spam',
       '-category:promotions',
-      '-category:social',
-      `newer_than:${timeRangeMap[timeRange]}`
-    ].filter(Boolean);
+      '-category:social'
+    ];
+
+    // Determine time range intelligently
+    if (forceFullScan) {
+      // Force full scan of requested time range
+      parts.push(`newer_than:${timeRangeMap[timeRange]}`);
+      console.log(`🔄 Force full scan - using time range: ${timeRange}`);
+    } else if (account.last_scanned_at) {
+      // There was a previous scan - get emails since then
+      const lastScanDate = new Date(account.last_scanned_at);
+      const dateStr = lastScanDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      parts.push(`after:${dateStr}`);
+      console.log(`📅 Smart scan - emails since last scan: ${dateStr}`);
+    } else {
+      // First scan - use requested time range
+      parts.push(`newer_than:${timeRangeMap[timeRange]}`);
+      console.log(`📅 First scan - using time range: ${timeRange}`);
+    }
     
-    searchQuery = parts.join(' ');
+    searchQuery = parts.filter(Boolean).join(' ');
   }
 
   try {
@@ -338,6 +356,20 @@ export async function saveEmailInsight(
   email: EmailMessage,
   insight: EmailInsight
 ): Promise<void> {
+  // 🔍 בדוק אם המייל כבר קיים
+  const { data: existing } = await supabaseAdmin
+    .from('email_insights')
+    .select('id')
+    .eq('gmail_account_id', accountId)
+    .eq('email_id', email.id)
+    .single();
+
+  if (existing) {
+    console.log(`⏭️  Skipping duplicate email: ${email.subject}`);
+    return;
+  }
+
+  // 💾 שמור רק אם לא קיים
   const { error } = await supabaseAdmin.from('email_insights').insert({
     gmail_account_id: accountId,
     email_id: email.id,
@@ -369,6 +401,7 @@ export async function scanAllAccounts(
     timeRange?: 'day' | 'week' | 'month';
     includeRead?: boolean;
     showLastEmailPerCompany?: boolean;
+    forceFullScan?: boolean; // 🚀 Force full scan regardless of last scan
   }
 ): Promise<{
   totalEmails: number;
@@ -405,6 +438,13 @@ export async function scanAllAccounts(
     return { totalEmails: 0, updates: [], insights: [] };
   }
 
+  // 🚀 SMART SYNC: Update last scanned timestamp
+  const now = new Date().toISOString();
+  await supabaseAdmin
+    .from('gmail_accounts')
+    .update({ last_scanned_at: now })
+    .eq('user_id', userId);
+
   // Get FULL context - everything the agent knows
   const { data: debts } = await supabaseAdmin
     .from('debts')
@@ -419,7 +459,7 @@ export async function scanAllAccounts(
     .select('id, name, company');
   
   const { data: tasks } = await supabaseAdmin
-    .from('tasks')
+    .from('unified_dashboard')
     .select('id, title, description, related_debt_id');
 
   const context = {
@@ -440,15 +480,31 @@ export async function scanAllAccounts(
       const emails = await fetchRecentEmails(account, { 
         maxResults: options?.maxResults || 50,
         timeRange: options?.timeRange || 'week',
-        includeRead: options?.includeRead || false
+        includeRead: options?.includeRead || false,
+        forceFullScan: options?.forceFullScan || false
       });
       totalEmails += emails.length;
 
       for (const email of emails) {
+        // 🚀 SMART CHECK: Skip emails already processed
+        const { data: existingInsight } = await supabaseAdmin
+          .from('email_insights')
+          .select('id, processed')
+          .eq('email_id', email.id)
+          .eq('gmail_account_id', account.id)
+          .single();
+
+        if (existingInsight) {
+          console.log(`⏭️  Skipping duplicate email: ${email.subject}`);
+          continue;
+        }
+
         const insight = await analyzeEmailWithContext(email, context);
         
         // Skip spam and low relevance
         if (insight.relevance === 'spam' || insight.relevance === 'low') {
+          // Still save to prevent reprocessing
+          await saveEmailInsight(account.id, email, insight);
           continue;
         }
 

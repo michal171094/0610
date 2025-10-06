@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     
     // Parse options from request body
     const body = await request.json().catch(() => ({}));
-    const { timeRange, includeRead, showLastEmailPerCompany } = body;
+    const { timeRange, includeRead, showLastEmailPerCompany, forceFullScan } = body;
     
     console.log('🚀 Starting Gmail scan with options:', { timeRange, includeRead, showLastEmailPerCompany });
     
@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
       timeRange: timeRange || 'week',
       includeRead: includeRead || false,
       showLastEmailPerCompany: showLastEmailPerCompany || false,
+      forceFullScan: forceFullScan || false,
       maxResults: 100
     });
     
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
       tasksCreated: 0,
       success: true,
       totalEmails: results.totalEmails || 0,
-      results,
+      updates: results.updates || [],  // ✅ שטח את updates החוצה!
       insights: insights || [],
       message: `Scanned ${results.totalEmails} emails, found ${results.updates?.length || 0} relevant, created 0 tasks`
     });
