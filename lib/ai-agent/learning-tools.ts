@@ -1,7 +1,7 @@
 // 📚 כלי למידה - שמירת הוראות והעדפות
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { MemoryManager } from '@/lib/memory/manager';
+import { MemoryManager } from '@/lib/ai/memory/memory-manager';
 
 const memoryManager = new MemoryManager();
 

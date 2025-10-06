@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { supabaseAdmin } from '@/lib/supabase';
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/drive', // Full access to all Drive files for complete cloud upload
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.metadata.readonly'
 ];

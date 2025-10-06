@@ -5,7 +5,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { allTools } from './tools';
 import { Task } from '@/lib/types';
-import { MemoryManager } from '@/lib/memory/manager';
+import { MemoryManager } from '@/lib/ai/memory/memory-manager';
 
 const SYSTEM_PROMPT = `אני עוזרת AI חכמה למיכל! 🌟
 
