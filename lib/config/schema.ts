@@ -263,8 +263,87 @@ export const DB_SCHEMA = {
       related_task: 'text',
       extracted_text: 'text',
       analyzed_at: 'timestamp',
+      processed: 'boolean',
+      processed_at: 'timestamp',
       created_at: 'timestamp',
       drive_account_id: 'uuid',
+    },
+  },
+
+  // 📱 Communications (WhatsApp/Chat)
+  communications: {
+    table: 'communications',
+    fields: {
+      id: 'text',
+      type: 'text',
+      content: 'text',
+      subject: 'text',
+      direction: 'text',
+      contact_id: 'text',
+      contact_name: 'text',
+      metadata: 'jsonb',
+      embedding: 'vector',
+      processed: 'boolean',
+      processed_at: 'timestamp',
+      created_task_id: 'text',
+      timestamp: 'timestamp',
+    },
+  },
+
+  // 🧠 Learned Patterns
+  learned_patterns: {
+    table: 'learned_patterns',
+    fields: {
+      id: 'uuid',
+      pattern_name: 'text',
+      pattern_type: 'text',
+      pattern_description: 'text',
+      pattern_data: 'jsonb',
+      trigger_conditions: 'jsonb',
+      recommended_actions: 'jsonb',
+      success_count: 'integer',
+      failure_count: 'integer',
+      success_rate: 'numeric',
+      failure_rate: 'numeric',
+      confidence_score: 'numeric',
+      last_used_at: 'timestamp',
+      last_triggered: 'timestamp',
+      usage_count: 'integer',
+      created_at: 'timestamp',
+      updated_at: 'timestamp',
+    },
+  },
+
+  // 📧 Gmail Sync Log
+  gmail_sync_log: {
+    table: 'gmail_sync_log',
+    fields: {
+      id: 'uuid',
+      gmail_account_id: 'uuid',
+      status: 'text',
+      started_at: 'timestamp',
+      completed_at: 'timestamp',
+      emails_scanned: 'integer',
+      emails_relevant: 'integer',
+      tasks_created: 'integer',
+      error_message: 'text',
+      created_at: 'timestamp',
+    },
+  },
+
+  // 📁 Drive Sync Log
+  drive_sync_log: {
+    table: 'drive_sync_log',
+    fields: {
+      id: 'uuid',
+      drive_account_id: 'uuid',
+      started_at: 'timestamp',
+      completed_at: 'timestamp',
+      files_scanned: 'integer',
+      files_analyzed: 'integer',
+      relevant_documents: 'integer',
+      tasks_created: 'integer',
+      error_message: 'text',
     },
   },
 } as const;

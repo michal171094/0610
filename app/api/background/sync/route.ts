@@ -26,54 +26,81 @@ export async function POST(request: NextRequest) {
       total: { suggestions: 0, errors: [] as string[] }
     };
 
-    // 1. Gmail Sync
+    // 1. Gmail Sync - Check for new insights that need processing
     try {
       console.log('📧 Starting Gmail sync...');
-      const gmailResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/gmail/scan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          timeRange: 'week',
-          includeRead: false,
-          maxEmails: 100
-        })
-      });
+      
+      // Check for unprocessed email insights from recent scans
+      const { data: newInsights } = await supabaseAdmin
+        .from(DB_SCHEMA.email_insights.table)
+        .select('*')
+        .eq('processed', false)
+        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(50);
 
-      if (gmailResponse.ok) {
-        const gmailData = await gmailResponse.json();
+      if (newInsights && newInsights.length > 0) {
+        // Process each insight
+        let processedCount = 0;
+        for (const insight of newInsights) {
+          if (insight.should_create_task || insight.is_update) {
+            processedCount++;
+          }
+          
+          // Mark as processed
+          await supabaseAdmin
+            .from(DB_SCHEMA.email_insights.table)
+            .update({ processed: true })
+            .eq('id', insight.id);
+        }
+        
         syncResults.gmail = {
-          scanned: gmailData.stats?.emailsScanned || 0,
-          insights: gmailData.insights?.length || 0
+          scanned: newInsights.length,
+          insights: processedCount
         };
-        console.log(`✅ Gmail sync completed: ${syncResults.gmail.scanned} emails, ${syncResults.gmail.insights} insights`);
+        console.log(`✅ Gmail sync completed: ${newInsights.length} insights processed, ${processedCount} actionable`);
+      } else {
+        syncResults.gmail = { scanned: 0, insights: 0 };
+        console.log('✅ Gmail sync completed: No new insights to process');
       }
     } catch (error) {
       console.error('❌ Gmail sync error:', error);
       syncResults.total.errors.push(`Gmail: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
-    // 2. Drive Sync
+    // 2. Drive Sync - Check for new document insights
     try {
       console.log('📁 Starting Drive sync...');
       
-      // Get all users with Drive accounts
-      const { data: driveAccounts } = await supabaseAdmin
-        .from(DB_SCHEMA.drive_accounts.table)
-        .select('user_id');
+      // Check for unprocessed document insights
+      const { data: newDocumentInsights } = await supabaseAdmin
+        .from(DB_SCHEMA.document_insights.table)
+        .select('*')
+        .eq('processed', false)
+        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(50);
 
-      if (driveAccounts && driveAccounts.length > 0) {
-        for (const account of driveAccounts) {
-          const driveScanner = new DriveScanner(account.user_id);
-          const driveInsights = await driveScanner.scanAllDocuments({
-            sinceDays: 7,
-            maxFiles: 50
-          });
+      if (newDocumentInsights && newDocumentInsights.length > 0) {
+        let processedCount = 0;
+        for (const insight of newDocumentInsights) {
+          if (insight.relevance !== 'low' && (insight.action_items?.length > 0 || insight.suggested_tasks?.length > 0)) {
+            processedCount++;
+          }
           
-          syncResults.drive.scanned += driveInsights.length;
-          syncResults.drive.insights += driveInsights.filter(i => i.relevance !== 'low').length;
-          
-          await driveScanner.updateLastScanned();
+          // Mark as processed (we'll add this field to the schema)
+          await supabaseAdmin
+            .from(DB_SCHEMA.document_insights.table)
+            .update({ processed: true })
+            .eq('id', insight.id);
         }
+        
+        syncResults.drive = {
+          scanned: newDocumentInsights.length,
+          insights: processedCount
+        };
+        console.log(`✅ Drive sync completed: ${newDocumentInsights.length} documents processed, ${processedCount} actionable`);
+      } else {
+        syncResults.drive = { scanned: 0, insights: 0 };
+        console.log('✅ Drive sync completed: No new document insights to process');
       }
     } catch (error) {
       console.error('❌ Drive sync error:', error);
@@ -86,7 +113,7 @@ export async function POST(request: NextRequest) {
       
       // Get recent communications that haven't been analyzed
       const { data: communications } = await supabaseAdmin
-        .from('communications')
+        .from(DB_SCHEMA.communications.table)
         .select('*')
         .gte('timestamp', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
         .eq('processed', false)
@@ -96,13 +123,13 @@ export async function POST(request: NextRequest) {
         // Analyze each communication for actionable items
         let insightsCount = 0;
         for (const comm of communications) {
-          const hasActionableKeywords = this.hasActionableContent(comm.content || '');
+          const hasActionableKeywords = hasActionableContent(comm.content || '');
           if (hasActionableKeywords) {
             insightsCount++;
             
             // Mark as processed
             await supabaseAdmin
-              .from('communications')
+              .from(DB_SCHEMA.communications.table)
               .update({ processed: true, processed_at: new Date().toISOString() })
               .eq('id', comm.id);
           }
@@ -111,6 +138,9 @@ export async function POST(request: NextRequest) {
         syncResults.chat.analyzed = communications.length;
         syncResults.chat.insights = insightsCount;
         console.log(`✅ Communications analysis completed: ${communications.length} messages, ${insightsCount} actionable`);
+      } else {
+        syncResults.chat = { analyzed: 0, insights: 0 };
+        console.log('✅ Communications analysis completed: No new communications to process');
       }
     } catch (error) {
       console.error('❌ Communications analysis error:', error);
@@ -222,18 +252,19 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  /**
-   * Check if communication content has actionable keywords
-   */
-  private hasActionableContent(content: string): boolean {
-    const actionableKeywords = [
-      'צריך', 'חשוב', 'דדליין', 'מועד', 'להתקשר', 'לשלוח', 'לעדכן',
-      'תזכורת', 'תשלום', 'חיוב', 'חשבון', 'מסמך', 'לשלוח', 'להעביר',
-      'urgent', 'deadline', 'payment', 'document', 'call', 'send'
-    ];
-    
-    return actionableKeywords.some(keyword => 
-      content.toLowerCase().includes(keyword.toLowerCase())
-    );
-  }
+}
+
+/**
+ * Check if communication content has actionable keywords
+ */
+function hasActionableContent(content: string): boolean {
+  const actionableKeywords = [
+    'צריך', 'חשוב', 'דדליין', 'מועד', 'להתקשר', 'לשלוח', 'לעדכן',
+    'תזכורת', 'תשלום', 'חיוב', 'חשבון', 'מסמך', 'לשלוח', 'להעביר',
+    'urgent', 'deadline', 'payment', 'document', 'call', 'send'
+  ];
+  
+  return actionableKeywords.some(keyword => 
+    content.toLowerCase().includes(keyword.toLowerCase())
+  );
 }
