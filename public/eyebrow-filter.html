@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>שבלונת גבות חיה — פילטר סרטוט</title>
+<style>
+  :root {
+    --panel-bg: rgba(15, 15, 20, 0.82);
+    --accent: #e8b4b8;
+    --text: #f5f0ee;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: #000; font-family: -apple-system, "Segoe UI", Arial, sans-serif; color: var(--text); }
+
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #video, #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  .mirrored { transform: scaleX(-1); }
+
+  #status {
+    position: fixed; top: max(10px, env(safe-area-inset-top)); right: 50%; transform: translateX(50%);
+    background: var(--panel-bg); backdrop-filter: blur(8px);
+    padding: 8px 16px; border-radius: 20px; font-size: 14px; z-index: 20;
+    max-width: 90vw; text-align: center; transition: opacity .4s;
+  }
+  #status.hidden { opacity: 0; pointer-events: none; }
+
+  /* --- toolbar --- */
+  #toolbar {
+    position: fixed; bottom: max(12px, env(safe-area-inset-bottom)); right: 50%; transform: translateX(50%);
+    display: flex; gap: 8px; z-index: 30; flex-wrap: wrap; justify-content: center;
+    max-width: 96vw;
+  }
+  .btn {
+    background: var(--panel-bg); backdrop-filter: blur(8px); color: var(--text);
+    border: 1px solid rgba(255,255,255,.18); border-radius: 24px;
+    padding: 10px 14px; font-size: 14px; cursor: pointer; white-space: nowrap;
+  }
+  .btn.active { background: var(--accent); color: #201316; border-color: var(--accent); font-weight: 600; }
+  .btn:active { transform: scale(.96); }
+
+  /* --- settings panel --- */
+  #panel {
+    position: fixed; bottom: 0; right: 0; left: 0; z-index: 40;
+    background: var(--panel-bg); backdrop-filter: blur(14px);
+    border-radius: 18px 18px 0 0; padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+    transform: translateY(105%); transition: transform .25s ease;
+    max-height: 62vh; overflow-y: auto;
+  }
+  #panel.open { transform: translateY(0); }
+  #panel h2 { font-size: 15px; margin-bottom: 10px; color: var(--accent); display: flex; justify-content: space-between; align-items: center; }
+  #panel h2 button { background: none; border: none; color: var(--text); font-size: 20px; cursor: pointer; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+  .row label { flex: 0 0 92px; font-size: 13px; }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); height: 26px; }
+  .row output { flex: 0 0 34px; font-size: 12px; text-align: left; opacity: .75; }
+  .row select, .row input[type=color] {
+    background: rgba(255,255,255,.08); color: var(--text); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 8px; padding: 5px 8px; font-size: 13px;
+  }
+  .row input[type=color] { padding: 2px; width: 44px; height: 30px; }
+  .hint { font-size: 11.5px; opacity: .6; line-height: 1.5; margin-top: 8px; }
+  #resetBtn { margin-top: 6px; width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" class="mirrored" autoplay muted playsinline></video>
+  <canvas id="overlay" class="mirrored"></canvas>
+</div>
+
+<div id="status">טוענת את מנוע זיהוי הפנים…</div>
+
+<div id="toolbar">
+  <button class="btn" id="freezeBtn">⏸ הקפאה</button>
+  <button class="btn" id="snapBtn">📷 שמירת תמונה</button>
+  <button class="btn" id="guidesBtn">📐 קווי עזר</button>
+  <button class="btn" id="settingsBtn">⚙️ התאמת צורה</button>
+</div>
+
+<div id="panel">
+  <h2>עיצוב השבלונה <button id="closePanel">✕</button></h2>
+  <div class="row"><label>גובה</label><input type="range" id="height" min="-0.12" max="0.12" step="0.005" value="0"><output></output></div>
+  <div class="row"><label>עובי</label><input type="range" id="thickness" min="0.04" max="0.22" step="0.005" value="0.11"><output></output></div>
+  <div class="row"><label>גובה הקשת</label><input type="range" id="archHeight" min="0" max="0.16" step="0.005" value="0.055"><output></output></div>
+  <div class="row"><label>מיקום הקשת</label><input type="range" id="archPos" min="0.45" max="0.8" step="0.01" value="0.62"><output></output></div>
+  <div class="row"><label>אורך הזנב</label><input type="range" id="tailLen" min="0.7" max="1.35" step="0.01" value="1"><output></output></div>
+  <div class="row"><label>שיפוע הזנב</label><input type="range" id="tailDrop" min="-0.06" max="0.08" step="0.005" value="0.01"><output></output></div>
+  <div class="row"><label>נקודת התחלה</label><input type="range" id="headShift" min="-0.1" max="0.12" step="0.005" value="0"><output></output></div>
+  <div class="row"><label>מילוי</label><input type="range" id="fillAlpha" min="0" max="0.6" step="0.02" value="0.14"><output></output></div>
+  <div class="row"><label>עובי קו</label><input type="range" id="lineWidth" min="1" max="6" step="0.5" value="2.5"><output></output></div>
+  <div class="row">
+    <label>צבע</label>
+    <input type="color" id="color" value="#ffffff">
+    <select id="dashStyle">
+      <option value="dash" selected>קו מקווקו (סרטוט)</option>
+      <option value="solid">קו רציף</option>
+    </select>
+  </div>
+  <button class="btn" id="resetBtn">↺ איפוס לברירת מחדל</button>
+  <p class="hint">
+    השבלונה מחושבת לפי הפרופורציות של הפנים שלך: תחילת הגבה מעל הזווית הפנימית של העין,
+    שיא הקשת על הקו שעובר מכנף האף דרך קצה האישון, והזנב על הקו מכנף האף דרך זווית העין החיצונית.
+    היא נצמדת לפנים גם בתנועה — אפשר לסמן עם עיפרון לפי הקו המקווקו.
+    כפתור ההקפאה עוצר את התמונה כדי להשוות, ושמירת תמונה מורידה צילום עם השבלונה.
+  </p>
+</div>
+
+<script type="module">
+const statusEl = document.getElementById('status');
+const video = document.getElementById('video');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+
+/* ---------- settings ---------- */
+const DEFAULTS = { height: 0, thickness: 0.11, archHeight: 0.055, archPos: 0.62, tailLen: 1, tailDrop: 0.01, headShift: 0, fillAlpha: 0.14, lineWidth: 2.5 };
+const params = { ...DEFAULTS, color: '#ffffff', dashStyle: 'dash', guides: false };
+try { Object.assign(params, JSON.parse(localStorage.getItem('browParams') || '{}')); } catch {}
+
+const sliderIds = ['height','thickness','archHeight','archPos','tailLen','tailDrop','headShift','fillAlpha','lineWidth'];
+for (const id of sliderIds) {
+  const el = document.getElementById(id);
+  el.value = params[id];
+  const out = el.parentElement.querySelector('output');
+  out.textContent = (+el.value).toFixed(2);
+  el.addEventListener('input', () => {
+    params[id] = +el.value;
+    out.textContent = (+el.value).toFixed(2);
+    save();
+  });
+}
+const colorEl = document.getElementById('color');
+colorEl.value = params.color;
+colorEl.addEventListener('input', () => { params.color = colorEl.value; save(); });
+const dashEl = document.getElementById('dashStyle');
+dashEl.value = params.dashStyle;
+dashEl.addEventListener('change', () => { params.dashStyle = dashEl.value; save(); });
+
+function save() { localStorage.setItem('browParams', JSON.stringify(params)); }
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  Object.assign(params, DEFAULTS);
+  for (const id of sliderIds) {
+    const el = document.getElementById(id);
+    el.value = params[id];
+    el.parentElement.querySelector('output').textContent = (+el.value).toFixed(2);
+  }
+  save();
+});
+
+/* ---------- panel & toolbar ---------- */
+const panel = document.getElementById('panel');
+document.getElementById('settingsBtn').addEventListener('click', () => panel.classList.toggle('open'));
+document.getElementById('closePanel').addEventListener('click', () => panel.classList.remove('open'));
+
+const guidesBtn = document.getElementById('guidesBtn');
+guidesBtn.classList.toggle('active', params.guides);
+guidesBtn.addEventListener('click', () => {
+  params.guides = !params.guides;
+  guidesBtn.classList.toggle('active', params.guides);
+  save();
+});
+
+let frozen = false;
+const freezeBtn = document.getElementById('freezeBtn');
+freezeBtn.addEventListener('click', () => {
+  frozen = !frozen;
+  if (frozen) { video.pause(); freezeBtn.textContent = '▶️ המשך'; freezeBtn.classList.add('active'); }
+  else { video.play(); freezeBtn.textContent = '⏸ הקפאה'; freezeBtn.classList.remove('active'); }
+});
+
+document.getElementById('snapBtn').addEventListener('click', () => {
+  const snap = document.createElement('canvas');
+  snap.width = canvas.width; snap.height = canvas.height;
+  const sctx = snap.getContext('2d');
+  // mirror the snapshot so it matches what's on screen
+  sctx.translate(snap.width, 0); sctx.scale(-1, 1);
+  sctx.drawImage(video, 0, 0, snap.width, snap.height);
+  sctx.drawImage(canvas, 0, 0);
+  const a = document.createElement('a');
+  a.download = 'eyebrow-stencil.png';
+  a.href = snap.toDataURL('image/png');
+  a.click();
+});
+
+/* ---------- geometry helpers ---------- */
+const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+const mul = (a, k) => ({ x: a.x * k, y: a.y * k });
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+const len = a => Math.hypot(a.x, a.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const lerpP = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
+/* landmark indices (MediaPipe Face Mesh) */
+const IDX = {
+  eyeL_outer: 33,  eyeL_inner: 133,   // image-left eye
+  eyeR_inner: 362, eyeR_outer: 263,   // image-right eye
+  noseBottom: 2,
+  browL_lower: [46, 53, 52, 65, 55],   // outer→inner
+  browR_lower: [276, 283, 282, 295, 285],
+};
+const NEEDED = [33, 133, 362, 263, 2, ...IDX.browL_lower, ...IDX.browR_lower];
+
+/* exponential smoothing of the landmarks we use, to stop jitter */
+const smoothed = new Map();
+function smoothLandmarks(lms) {
+  const alpha = 0.45;
+  for (const i of NEEDED) {
+    const p = lms[i];
+    const prev = smoothed.get(i);
+    smoothed.set(i, prev ? lerpP(prev, p, alpha) : { x: p.x, y: p.y });
+  }
+  return i => smoothed.get(i);
+}
+
+/* ---------- stencil drawing ---------- */
+function drawStencil(get) {
+  const W = canvas.width, H = canvas.height;
+  const px = p => ({ x: p.x * W, y: p.y * H });
+
+  // face-local frame: origin between the eyes, x along the eye line, y up; unit = inter-eye distance
+  const eyeCL = px(mid(get(IDX.eyeL_outer), get(IDX.eyeL_inner)));
+  const eyeCR = px(mid(get(IDX.eyeR_inner), get(IDX.eyeR_outer)));
+  const O = mid(eyeCL, eyeCR);
+  const ex = sub(eyeCR, eyeCL);
+  const s = len(ex);
+  if (s < 1) return;
+  const ux = mul(ex, 1 / s);
+  const uy = { x: ux.y, y: -ux.x }; // screen-up
+  const toFace = p => { const d = sub(p, O); return { x: dot(d, ux) / s, y: dot(d, uy) / s }; };
+  const toScreen = f => add(O, add(mul(ux, f.x * s), mul(uy, f.y * s)));
+
+  // symmetric measurements (average of the two sides, in face units)
+  const fInL = toFace(px(get(IDX.eyeL_inner))), fInR = toFace(px(get(IDX.eyeR_inner)));
+  const fOutL = toFace(px(get(IDX.eyeL_outer))), fOutR = toFace(px(get(IDX.eyeR_outer)));
+  const innerX = (Math.abs(fInL.x) + Math.abs(fInR.x)) / 2;
+  const outerX = (Math.abs(fOutL.x) + Math.abs(fOutR.x)) / 2;
+  const nose = toFace(px(get(IDX.noseBottom)));
+
+  // natural brow height from the detected lower-brow landmarks (averaged across sides)
+  const browY = idxPair => (toFace(px(get(idxPair[0]))).y + toFace(px(get(idxPair[1]))).y) / 2;
+  const hHead = browY([IDX.browL_lower[4], IDX.browR_lower[4]]);
+
+  // classic proportion lines, anchored at the nose-wing point (≈ vertically under the inner canthus)
+  const noseWingY = nose.y;
+  const yHeadBottom = hHead + params.height;
+  const yArchBottom = yHeadBottom + params.archHeight;
+  const yTailBottom = yHeadBottom - params.tailDrop;
+
+  // tail: intersection of the (nose wing → outer canthus) line with the brow-tail height
+  const tailLineT = (yTailBottom - noseWingY) / (0 - noseWingY); // eye line is y=0
+  let tailX = innerX + (outerX - innerX) * tailLineT;
+  const headX = innerX + params.headShift;
+  tailX = headX + (tailX - headX) * params.tailLen;
+  const archX = headX + (tailX - headX) * params.archPos;
+
+  const tHead = params.thickness;
+  const tArch = params.thickness * 0.88;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+  for (const sign of [-1, 1]) {
+    const P = (lx, y) => toScreen({ x: sign * lx, y });
+
+    const headB = P(headX, yHeadBottom);
+    const headT = P(headX, yHeadBottom + tHead);
+    const archB = P(archX, yArchBottom);
+    const archT = P(archX, yArchBottom + tArch);
+    const tail  = P(tailX, yTailBottom + tArch * 0.25);
+
+    // control points for smooth curves
+    const cB1 = P(headX + (archX - headX) * 0.55, yHeadBottom + params.archHeight * 0.25);
+    const cB2 = P(archX + (tailX - archX) * 0.45, yArchBottom - (yArchBottom - yTailBottom) * 0.05);
+    const cT1 = P(archX + (tailX - archX) * 0.4, yArchBottom + tArch * 0.8);
+    const cT2 = P(headX + (archX - headX) * 0.5, yHeadBottom + tHead + params.archHeight * 0.35);
+
+    const path = new Path2D();
+    path.moveTo(headB.x, headB.y);
+    path.quadraticCurveTo(cB1.x, cB1.y, archB.x, archB.y);
+    path.quadraticCurveTo(cB2.x, cB2.y, tail.x, tail.y);
+    path.quadraticCurveTo(cT1.x, cT1.y, archT.x, archT.y);
+    path.quadraticCurveTo(cT2.x, cT2.y, headT.x, headT.y);
+    path.closePath();
+
+    if (params.fillAlpha > 0) {
+      ctx.fillStyle = hexToRgba(params.color, params.fillAlpha);
+      ctx.fill(path);
+    }
+    ctx.strokeStyle = params.color;
+    ctx.lineWidth = params.lineWidth;
+    ctx.setLineDash(params.dashStyle === 'dash' ? [7, 6] : []);
+    ctx.stroke(path);
+
+    // arch-peak tick mark
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    const tick1 = P(archX, yArchBottom + tArch + 0.02), tick2 = P(archX, yArchBottom + tArch + 0.05);
+    ctx.moveTo(tick1.x, tick1.y); ctx.lineTo(tick2.x, tick2.y);
+    ctx.lineWidth = Math.max(1, params.lineWidth - 1);
+    ctx.stroke();
+
+    if (params.guides) {
+      ctx.save();
+      ctx.strokeStyle = hexToRgba('#7fd4ff', 0.75);
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 5]);
+      const noseW = P(innerX, noseWingY);
+      // 1. vertical: nose wing → brow head
+      line(noseW, P(innerX, yHeadBottom + tHead + 0.08));
+      // 2. nose wing → through outer canthus → tail
+      line(noseW, P(tailX + 0.06, yTailBottom + tArch));
+      // 3. nose wing → arch peak
+      line(noseW, P(archX, yArchBottom + tArch + 0.06));
+      ctx.restore();
+    }
+  }
+}
+
+function line(a, b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+function hexToRgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/* ---------- camera + face tracking ---------- */
+let landmarker = null;
+
+async function main() {
+  try {
+    statusEl.textContent = 'טוענת את מנוע זיהוי הפנים…';
+    const mod = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14'
+    );
+    const { FaceLandmarker, FilesetResolver } = mod.default ?? mod;
+    const fileset = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+    const options = delegate => ({
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        delegate,
+      },
+      runningMode: 'VIDEO',
+      numFaces: 1,
+    });
+    try {
+      landmarker = await FaceLandmarker.createFromOptions(fileset, options('GPU'));
+    } catch {
+      landmarker = await FaceLandmarker.createFromOptions(fileset, options('CPU'));
+    }
+
+    statusEl.textContent = 'מבקשת גישה למצלמה…';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await new Promise(res => { video.onloadedmetadata = res; });
+    await video.play();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    statusEl.textContent = 'מחפשת פנים…';
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = err.name === 'NotAllowedError'
+      ? 'אין הרשאה למצלמה — אשרי גישה למצלמה בדפדפן ורענני את הדף.'
+      : 'שגיאה בטעינה: ' + err.message;
+  }
+}
+
+let lastVideoTime = -1;
+let faceSeen = false;
+
+function loop() {
+  if (!frozen && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const result = landmarker.detectForVideo(video, performance.now());
+    if (result.faceLandmarks && result.faceLandmarks.length > 0) {
+      if (!faceSeen) { faceSeen = true; statusEl.classList.add('hidden'); }
+      const get = smoothLandmarks(result.faceLandmarks[0]);
+      drawStencil(get);
+    } else {
+      if (faceSeen) {
+        faceSeen = false;
+        statusEl.classList.remove('hidden');
+        statusEl.textContent = 'מחפשת פנים… קרבי את הפנים למרכז המסך';
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      smoothed.clear();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+main();
+</script>
+</body>
+</html>
