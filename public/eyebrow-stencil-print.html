@@ -128,8 +128,11 @@ const dist3 = (a, b) => len3(sub3(a, b));
 
 /* ---------- measurement from averaged landmarks ---------- */
 function computeMeasurements(P) {
-  // P: Map(index → averaged {x,y,z}) in normalized image units (z same scale as x)
-  const g = i => P.get(i);
+  // P: Map(index → averaged {x,y,z}) in normalized image units (z same scale as x).
+  // Convert to a uniform pixel scale first — x,z are fractions of the width but y is a
+  // fraction of the height, so mixing them raw would skew every 3D distance.
+  const vw = canvas.width || 1280, vh = canvas.height || 720;
+  const g = i => { const p = P.get(i); return { x: p.x * vw, y: p.y * vh, z: p.z * vw }; };
 
   // mm scale from iris diameter
   const irisPx = (dist3(g(469), g(471)) + dist3(g(474), g(476))) / 2;
