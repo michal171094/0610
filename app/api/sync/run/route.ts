@@ -1,4 +1,4 @@
-git add -A && git commit -m "Snapshot commit: project state on 2025-10-06"import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { SyncAgent } from '@/lib/agents/sync-agent';
 
